@@ -30,12 +30,18 @@ async def verify(user_id: str, app_id: str, request: Request):
         result = await db.execute(select(AppSession).where(AppSession.user_id == user_id, AppSession.app_id == app_id))
         s = result.scalar_one_or_none()
         if not s: raise HTTPException(404, "Session not found")
-        sid, method = s.id, s.login_method
+        sid, method, snapshot_id = s.id, s.login_method, s.snapshot_id
         s.use_count += 1
         s.last_used_at = datetime.now(timezone.utc)
         await db.commit()
     health = await _mon(request).verify_session(sid)
-    return SessionVerifyResponse(session_id=sid, health=health, re_auth_required=(health == SessionHealth.EXPIRED), login_method=method if health == SessionHealth.EXPIRED else None)
+    return SessionVerifyResponse(
+        session_id=sid,
+        health=health,
+        re_auth_required=(health == SessionHealth.EXPIRED),
+        login_method=method if health == SessionHealth.EXPIRED else None,
+        snapshot_id=snapshot_id,
+    )
 
 @router.get("/{user_id}/sessions/{app_id}/health-history", response_model=list[HealthEventResponse])
 async def history(user_id: str, app_id: str, limit: int = 20):

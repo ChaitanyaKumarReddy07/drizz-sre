@@ -16,8 +16,12 @@ class PoolManager:
 
     async def initialize(self):
         os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
-        logger.info(f"Seeding warm pool: {WARM_POOL_SIZE} emulators")
-        await asyncio.gather(*[self._provision_warm() for _ in range(WARM_POOL_SIZE)], return_exceptions=True)
+        await self._reconcile_state()
+        idle_count = await self._count_runtime_idle()
+        shortfall = max(0, WARM_POOL_SIZE - idle_count)
+        logger.info(f"Seeding warm pool: target={WARM_POOL_SIZE}, current_idle={idle_count}, shortfall={shortfall}")
+        if shortfall > 0:
+            await asyncio.gather(*[self._provision_warm() for _ in range(shortfall)], return_exceptions=True)
         logger.info("Pool ready")
 
     async def provision(self, snapshot_id=None):
@@ -60,7 +64,11 @@ class PoolManager:
 
     async def pool_stats(self):
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Emulator.status, func.count()).group_by(Emulator.status))
+            result = await db.execute(
+                select(Emulator.status, func.count())
+                .where(Emulator.status != EmulatorStatus.TERMINATED)
+                .group_by(Emulator.status)
+            )
             counts = {r[0]: r[1] for r in result}
         return {
             "warm_pool_size": WARM_POOL_SIZE,
@@ -117,14 +125,26 @@ class PoolManager:
 
     async def _grab_idle(self):
         async with AsyncSessionLocal() as db:
-            result = await db.execute(select(Emulator).where(Emulator.status == EmulatorStatus.IDLE).limit(1))
-            em = result.scalar_one_or_none()
-            if em:
+            result = await db.execute(
+                select(Emulator)
+                .where(Emulator.status == EmulatorStatus.IDLE)
+                .order_by(Emulator.created_at.asc())
+                .limit(10)
+            )
+            candidates = result.scalars().all()
+            for em in candidates:
+                inst = self._instances.get(em.id)
+                if not inst:
+                    em.status = EmulatorStatus.TERMINATED
+                    em.updated_at = datetime.now(timezone.utc)
+                    continue
                 em.status = EmulatorStatus.RUNNING
                 em.updated_at = datetime.now(timezone.utc)
                 await db.commit()
                 await db.refresh(em)
                 return em
+            if candidates:
+                await db.commit()
         return None
 
     async def _create_emulator(self, snapshot_id):
@@ -159,7 +179,26 @@ class PoolManager:
             logger.error(f"Warm provision failed: {e}")
 
     async def _replenish_pool(self):
-        stats = await self.pool_stats()
-        shortfall = WARM_POOL_SIZE - stats["idle_count"]
+        idle_count = await self._count_runtime_idle()
+        shortfall = WARM_POOL_SIZE - idle_count
         if shortfall > 0:
             await asyncio.gather(*[self._provision_warm() for _ in range(shortfall)], return_exceptions=True)
+
+    async def _count_runtime_idle(self) -> int:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Emulator.id).where(Emulator.status == EmulatorStatus.IDLE))
+            ids = [r[0] for r in result]
+        return sum(1 for eid in ids if eid in self._instances)
+
+    async def _reconcile_state(self):
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Emulator).where(Emulator.status != EmulatorStatus.TERMINATED)
+            )
+            rows = result.scalars().all()
+            for em in rows:
+                em.status = EmulatorStatus.TERMINATED
+                em.assigned_to = None
+                em.updated_at = datetime.now(timezone.utc)
+            if rows:
+                await db.commit()

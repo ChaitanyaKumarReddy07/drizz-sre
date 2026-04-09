@@ -1,4 +1,4 @@
-import asyncio, random, logging
+import os, asyncio, random, logging
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -6,15 +6,21 @@ from app.db import AsyncSessionLocal
 from app.models.session import AppSession, SessionHealth, SessionTier, SessionHealthEvent
 
 logger = logging.getLogger(__name__)
+HOT_CHECK_INTERVAL_SECONDS = int(os.getenv("HOT_CHECK_INTERVAL_SECONDS", "3600"))
+WARM_CHECK_INTERVAL_SECONDS = int(os.getenv("WARM_CHECK_INTERVAL_SECONDS", "21600"))
+REBALANCE_INTERVAL_SECONDS = int(os.getenv("REBALANCE_INTERVAL_SECONDS", "21600"))
+HOT_FRESHNESS_HOURS = int(os.getenv("HOT_FRESHNESS_HOURS", "24"))
+WARM_FRESHNESS_DAYS = int(os.getenv("WARM_FRESHNESS_DAYS", "7"))
+
 
 class SessionHealthMonitor:
     def __init__(self):
         self._sched = AsyncIOScheduler()
 
     def start(self):
-        self._sched.add_job(self._check_hot, "interval", hours=1, id="hot_check")
-        self._sched.add_job(self._check_warm, "interval", hours=6, id="warm_check")
-        self._sched.add_job(self._rebalance, "interval", hours=6, id="rebalance")
+        self._sched.add_job(self._check_hot, "interval", seconds=HOT_CHECK_INTERVAL_SECONDS, id="hot_check")
+        self._sched.add_job(self._check_warm, "interval", seconds=WARM_CHECK_INTERVAL_SECONDS, id="warm_check")
+        self._sched.add_job(self._rebalance, "interval", seconds=REBALANCE_INTERVAL_SECONDS, id="rebalance")
         self._sched.start()
         logger.info("Session health monitor started")
 
@@ -24,8 +30,11 @@ class SessionHealthMonitor:
     async def verify_session(self, session_id: str) -> SessionHealth:
         return await self._check_session(session_id)
 
-    async def _check_hot(self): await self._check_tier(SessionTier.HOT, timedelta(hours=24))
-    async def _check_warm(self): await self._check_tier(SessionTier.WARM, timedelta(days=7))
+    async def _check_hot(self):
+        await self._check_tier(SessionTier.HOT, timedelta(hours=HOT_FRESHNESS_HOURS))
+
+    async def _check_warm(self):
+        await self._check_tier(SessionTier.WARM, timedelta(days=WARM_FRESHNESS_DAYS))
 
     async def _check_tier(self, tier, interval):
         cutoff = datetime.now(timezone.utc) - interval
@@ -45,7 +54,8 @@ class SessionHealthMonitor:
         health = SessionHealth.ALIVE if random.random() < 0.8 else SessionHealth.EXPIRED
         async with AsyncSessionLocal() as db:
             session = await db.get(AppSession, session_id)
-            if not session: return health
+            if not session:
+                return health
             session.health = health
             session.last_verified_at = datetime.now(timezone.utc)
             db.add(SessionHealthEvent(session_id=session_id, health=health, detail={"method": "mock_vision"}))
@@ -61,6 +71,6 @@ class SessionHealthMonitor:
                 days = (now - s.last_used_at).days if s.last_used_at else 999
                 new_tier = SessionTier.HOT if (s.use_count >= 5 and days <= 7) else (SessionTier.COLD if days > 30 else SessionTier.WARM)
                 if new_tier != s.tier:
-                    logger.info(f"Session {s.id}: {s.tier.value} → {new_tier.value}")
+                    logger.info(f"Session {s.id}: {s.tier.value} -> {new_tier.value}")
                     s.tier = new_tier
             await db.commit()

@@ -22,6 +22,12 @@ async def get_emulator(emulator_id: str, request: Request):
     if not em: raise HTTPException(404, "Not found")
     return em
 
+@router.get("/{emulator_id}/status", response_model=EmulatorResponse)
+async def get_emulator_status(emulator_id: str, request: Request):
+    em = await _pool(request).get_status(emulator_id)
+    if not em: raise HTTPException(404, "Not found")
+    return em
+
 @router.post("/{emulator_id}/snapshot", response_model=SnapshotResponse, status_code=201)
 async def create_snapshot(emulator_id: str, body: SnapshotCreateRequest, request: Request):
     try:

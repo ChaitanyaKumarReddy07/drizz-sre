@@ -1,12 +1,13 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from app.models.mission import MissionStatus, TaskStatus
 
 class TaskInput(BaseModel):
-    app_id: str
+    app_id: str = Field(alias="app")
     goal: str
     depends_on: Optional[str] = None
+    model_config = {"populate_by_name": True}
 
 class MissionRequest(BaseModel):
     user_id: str
@@ -17,6 +18,7 @@ class TaskResponse(BaseModel):
     app_id: str
     goal: str
     status: TaskStatus
+    depends_on: Optional[str] = None
     emulator_id: Optional[str] = None
     gate_type: Optional[str] = None
     result: Optional[dict] = None

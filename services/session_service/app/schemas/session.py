@@ -35,3 +35,4 @@ class SessionVerifyResponse(BaseModel):
     health: SessionHealth
     re_auth_required: bool
     login_method: Optional[LoginMethod] = None
+    snapshot_id: Optional[str] = None

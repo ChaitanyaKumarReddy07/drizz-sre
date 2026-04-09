@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timezone
+import uuid
 from app.db import AsyncSessionLocal
 from app.models.mission import Mission, MissionTask, TaskStatus
 from app.schemas.mission import MissionRequest, MissionResponse
@@ -9,20 +9,46 @@ from app.core.executor import MissionExecutor
 
 router = APIRouter()
 executor = MissionExecutor()
+SEQUENTIAL_KEYWORDS = ("pay", "payment", "checkout", "book", "purchase", "renew", "confirm")
+
+
+def _is_sequential_goal(goal: str) -> bool:
+    text = goal.lower()
+    return any(k in text for k in SEQUENTIAL_KEYWORDS)
+
+
+def _plan_tasks(body: MissionRequest) -> list[dict]:
+    planned = []
+    for idx, task in enumerate(body.tasks):
+        task_id = str(uuid.uuid4())
+        depends_on = task.depends_on
+        if not depends_on and idx > 0 and _is_sequential_goal(task.goal):
+            depends_on = planned[idx - 1]["id"]
+        planned.append(
+            {
+                "id": task_id,
+                "app_id": task.app_id,
+                "goal": task.goal,
+                "depends_on": depends_on,
+            }
+        )
+    return planned
 
 @router.post("", response_model=MissionResponse, status_code=201)
 async def create_mission(body: MissionRequest, bg: BackgroundTasks):
+    planned_tasks = _plan_tasks(body)
     async with AsyncSessionLocal() as db:
         mission = Mission(user_id=body.user_id)
         db.add(mission)
         await db.flush()
 
-        for t in body.tasks:
+        for t in planned_tasks:
             db.add(MissionTask(
+                id=t["id"],
                 mission_id=mission.id,
-                app_id=t.app_id,
-                goal=t.goal,
-                depends_on=t.depends_on,
+                app_id=t["app_id"],
+                goal=t["goal"],
+                depends_on=t["depends_on"],
             ))
         await db.commit()
         await db.refresh(mission)

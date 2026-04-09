@@ -16,6 +16,7 @@ class TaskStatus(str, enum.Enum):
     EXECUTING = "executing"
     IDENTITY_GATE = "identity_gate"
     COMPLETING = "completing"
+    RE_AUTH_REQUIRED = "re_auth_required"
     DONE = "done"
     FAILED = "failed"
 
