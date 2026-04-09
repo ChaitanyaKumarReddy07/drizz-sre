@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: drizz
+      POSTGRES_PASSWORD: drizz
+      POSTGRES_DB: drizz
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drizz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  emulator_service:
+    build: ./services/emulator_service
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://drizz:drizz@postgres:5432/drizz
+      REDIS_URL: redis://redis:6379
+      WARM_POOL_SIZE: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - snapshots:/app/snapshots
+
+  session_service:
+    build: ./services/session_service
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://drizz:drizz@postgres:5432/drizz
+      REDIS_URL: redis://redis:6379
+      EMULATOR_SERVICE_URL: http://emulator_service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      emulator_service:
+        condition: service_started
+
+  mission_service:
+    build: ./services/mission_service
+    ports:
+      - "8003:8003"
+    environment:
+      DATABASE_URL: postgresql://drizz:drizz@postgres:5432/drizz
+      REDIS_URL: redis://redis:6379
+      EMULATOR_SERVICE_URL: http://emulator_service:8001
+      SESSION_SERVICE_URL: http://session_service:8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      emulator_service:
+        condition: service_started
+      session_service:
+        condition: service_started
+
+volumes:
+  pgdata:
+  snapshots:
