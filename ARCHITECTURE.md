@@ -1,5 +1,18 @@
 # Production Architecture Plan (Part 4)
 
+Client (User/API)
+        ↓
+Mission Service (Orchestrator)
+        ↓
+Session Service (Session validation)
+        ↓
+Emulator Service (Provision + snapshots)
+        ↓
+Postgres (state) + Redis (fast ops)
+        ↓
+Snapshots Volume (session restore)
+
+
 ## Scope and Target
 
 This document describes how to evolve the prototype to production for:
